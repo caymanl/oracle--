@@ -1,0 +1,198 @@
+#！bin/sh
+#sqlloader接数shell
+#声明变量
+execpath=/home/batch
+ctl=$execpath/ctl
+bad=$execpath/bad
+logdir=$execpath/log
+date=`date +%Y%m%d`
+log=$execpath/log/loaddata_$date.log
+divcode=$execpath/base/divcode.txt
+#passwd 含有字符需加''
+database=username/'$password@'@地址:1521/chnlrpt
+cd $execpath
+export NLS_LANG=AMERICAN_AMERICA.ZHS16GBK
+export database
+
+loaddate=$1
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+echo"loaddata($loaddate) start with `%Y%m%d%H%M%S`">>$log
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+#loaddata from ftp into the temptable
+function loaddata(){
+    ftpfilename=$1
+    ctlname=$1
+    loadintablename=$2
+    time=`date +%Y%m%d`
+    llog=$logdir/load.log
+    llog1=$logdir/1.log
+    llog2=$logdir/$ctlname_$time.log
+    badfile=$ctlname_time.bad
+    ftpid=10.182.174.154
+    username=sxsjjs
+    passwd='user_passwd'
+    filepwd=/ftp/data
+    echo "ftp $ftpfilename">>$llog
+    echo "
+         open $ftpid
+         user $username $passwd
+         cd  $filepwd/$loaddate
+         lcd datadir
+         bin
+         get $filename.txt.Z
+         quit " | ftp -n>>$llog
+#uncompress the ftpfile
+echo "uncompress the $ftpfileneme.txt.Z">>$llog
+rm -f $execpath/datadir/$ftpfilename.txt
+uncompress -fv $ftpfileneme.txt.Z
+ncount=`grep -c . $execpath/datadir/$ftpfilename.txt`
+echo "$ftpfilename总行数：$ncount">>$llog
+#truncate the temptable
+echo "truncate table $loadintablename">>$llog
+echo " conn $database;
+     truncate table $loadintablename;
+     quit" |sqlplus/nolog>>$llog1
+cat $llog1 |grep Ora- >>$llog
+rm -f $llog1
+#loaddata to temptable
+echo "sqlloader data to  $loadintablename">>$llog
+sqlldr userid=$database control=$ctl/$ctlname.ctl  log=$llog2 bad=$bad/$badfile errors=10000 rows=10000 readsize=20680000 bindsize=20680000 parallel=true>>$llog1
+if [ -f "$bad/$badfile" ]  then 
+   badrow=`grep -c . $bad/$badfile`
+   badsize=`ll $bad/$badfile |awk '{print $5}'`
+echo "有bad file,filename:$badfile, 错误行数：$badrow ,大小：$badsize">>$llog  
+fi
+
+#sqlloader日志
+tabline=`cat $llog2 | grep -nH Table | awk -F: '{print $2}' | sed -n '$p'`
+ncount=`cat $llog2 | awk '{print NR}' | tail -1`
+let i=$ncount-$tabline+1
+tail -$i $llog2>>$llog
+if [ "`cat $llog2 | grep -e ORA- -e SQL*Loader- | head -n 1`" ]   then 
+  echo "sqlloader $ctlname 出错,请查看$llog2">>$llog
+fi
+rm -f $ctlname.txt
+}
+
+#SP执行
+function execsp2(){
+date=`date +%Y%m%d`
+splog=$logdir/sp_$date.log
+echo "start sp idsload_$1 with `date +%Y%m%d%H%M%S`">>$splog
+echo "conn $database;
+      exec pkg_idsload.$1('$2');
+      quit"|sqlplus/nolog>>$splog
+echo "end sp idsload_$1 with `date +%Y%m%d%H%M%S`">>$splog
+} 
+
+#循环执行分公司
+function  execsp(){
+     llog=$1.log
+echo "start load $1 with `date +%Y%m%m%H%M%M`"   >>$llog
+     if [ "$1" == "preson" ]
+        then
+        execsp2 $1 000000000000
+        else
+      for branch in $(cat $divcode)
+        do
+        execsp2 $1 $branch &
+        done      
+        wait
+     fi
+echo "end load $1 with `date +%Y%m%m%H%M%M`"   >>$llog    
+     if [ "`cat $splog | grep -e ORA- -e BEGIN -e ERROR -e PLS | head -n 1`" ] 
+        then
+       echo "load $1 出现错误">>$log
+       cat $splog |grep -e ORA- -e BEGIN -e ERROR -e PLS >>$log
+     fi
+    cat $llog |grep -e start -e end >>$log
+    rm -f $llog
+}
+
+loaddata person p10i_in_person && execsp person &
+loaddata app_nb p10i_in_app_nb && execsp app_nb &
+wait
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+echo"loaddata($loaddate) end with `%Y%m%d%H%M%S`">>$log
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+
+
+
+#控制文件app_nb.ctl
+#########################################################################################################
+load data
+infile './data/app_nb.txt'
+#badfile './bad/app_nb.bad'
+#discardfile './disdata/app_nb.disc'
+into table p10i_in_app_nb/"p10i_in_app_nb"
+Append/insert/replace
+fields terminated by X'09'  '|'    --X'09' 制表符
+(
+a filler,--数据文件中第一列不接， a为虚拟列
+b,       --char 列或者number列
+c  date 'yyyy-mm-dd',--20170918 日期列
+d  date 'yyyy-mm-dd hh24:mi:ss' --有时分秒的列
+e  char(2048) --字符较多的列
+)
+#########################################################################################################
+#临时表插入目标表SP
+#########################################################################################################
+create or replace procedure app_nb(p_branch varchar2) is 
+   --声明变量
+   v_rowid rowid;
+   v_appno   p10i_in_app_nb.appno%type;
+   v_endtime p10i_in_app_nb.endtime%type;
+   v_branch  p10i_in_app_nb.branch%type;
+   v_classcode  p10i_in_app_nb.classcode%type;
+   v_startdate  date;
+   v_currentrow number default 0;
+   v_rowcount   number :=0;
+   
+   cursor c_app_nb is 
+      select rowid,appno,endtime,branch,classcode from  p10i_in_app_nb where branch = p_branch  order by  endtime;
+   
+  begin
+  	v_startdate := sysdate;
+  	open c_app_nb ;   
+  	loop
+  	fetch c_app_nb  
+  	   into v_rowid,v_appno,v_endtime,v_branch,v_classcode;
+  	exit when c_app_nb%notfound;
+  	--按业务主键删除
+  delete from p10i_md_app_nb where  appno = v_appno and branch=v_branch and classcode=v_classcode;
+  if  substr(v_endtime,1,8)='99991231' then 
+     insert into p10i_md_app_nb()
+     select () from p10i_in_app_nb where rowid = v_rowid;
+  end if ;
+  v_currentrow := v_currentrow +1;
+  v_rowcount := v_rowcount +1;
+  if v_currentrow = 1000  then 
+      commit;
+      v_currentrow :=0;
+end if; 	
+   end loop;
+  close c_app_nb;
+commit;
+insert into t_log(spname,times,rows)  
+          values('app_nb',(sysdate - v_startdate)*24*60,v_rowcount)	;commit;
+end;
+##############################################################################################################  
+load data
+infile './data/app_nb.txt'
+#badfile './bad/app_nb.bad'
+#discardfile './disdata/app_nb.disc'
+Append/insert/replace
+into table p10i_in_app_nb/"p10i_in_app_nb"
+when a<>'02' and a<>'04' and a<>'09'
+
+
+fields terminated by X'09'  '|'    --X'09' 制表符
+tariling nullcols
+(
+a filler,--数据文件中第一列不接， a为虚拟列
+b,       --char 列或者number列
+c  date 'yyyy-mm-dd',--20170918 日期列
+d  date 'yyyy-mm-dd hh24:mi:ss' --有时分秒的列
+e  char(2048) --字符较多的列
+)
+################################################################################################################  
