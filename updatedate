@@ -1,0 +1,86 @@
+#! bin/sh
+execpath=/home/batch
+sql=$execpath/sql
+logdir=$execpath/log
+date=`date +%Y%m%d`
+log=$execpath/log/updata_$date.logs
+url=$execpath/url
+list=$execpath/base/spoolist.txt
+#passwd 含有字符需加''
+database=username/'$password@'@地址:1521/chnlrpt
+cd $execpath
+export NLS_LANG=AMERICAN_AMERICA.ZHS16GBK
+export database
+day=$1
+
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+echo"updata($day) start with `%Y%m%d%H%M%S`">>$log
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+for tablename in $(cat $list)
+do 
+echo " conn $database;
+       set echo off;
+       set colsep |;
+       set feedback off;
+       set heading off;
+       set pagesize 0;
+       set linesize 1000;
+       set termout off;
+       set trimout on ;
+       set trimspool on ;
+       #set numwidth 38;
+       spool $url/$tablename_$day.txt;
+       @$sql/$tablename $day;
+       spool off;
+       /
+       quit">$tablename.sql
+sqlplus /nolog @$tablename.sql>>$logdir/$tablename.log
+if [ -f "$url/$tablename_$day.txt" ]  then 
+echo "$tablename_$day updata success!">>$log
+else
+echo "$tablename_$day updata fail!">>$log
+cat $logdir/$tablename.log|grep -e ORA- -e BEGIN -e ERROR -e PLS >>$log
+fi
+done
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+echo"updata($day) end with `%Y%m%d%H%M%S`">>$log
+echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>">>$log
+
+##################################################################################################
+#导出语句放在SQL目录下，命名为表.sql，导出表清单写在spoollist中，与SQL文件家中的表名一致
+define &comdate=&1
+select to_char(comdate,'yyyymmdd')                || '|' ||
+       to_char(enddate,'yyyymmdd hh24:mi:ss')     || '|' ||
+       col1                                       || '|' ||
+       col2                                       || '|' ||
+       col3                                      
+from table  where  comdate=to_date('&comdate','yyyymmdd') ;  
+##################################################################################################
+#另一版本
+set echo off newpage 0 space 0 pagesize 0 line 5000 feed off head off trimspool on  termout off verify off 
+define filename=&1
+define comdate=&2
+SPOOL /execpath/url/&filename
+select to_char(comdate,'yyyymmdd')                || '|' ||
+       to_char(enddate,'yyyymmdd hh24:mi:ss')     || '|' ||
+       col1                                       || '|' ||
+       col2                                       || '|' ||
+       col3                                      
+from table  where  comdate=to_date('&comdate','yyyymmdd') ; 
+SPOOL OFF 
+quit;
+#################################################################################################
+#另一版本
+set echo off newpage 0 space 0 pagesize 0 line 5000 feed off head off trimspool on  termout off verify off 
+SPOOL /execpath/url/&1
+select to_char(comdate,'yyyymmdd')                || '|' ||
+       to_char(enddate,'yyyymmdd hh24:mi:ss')     || '|' ||
+       col1                                       || '|' ||
+       col2                                       || '|' ||
+       col3                                      
+from table  where  comdate=to_date('&2','yyyymmdd') ; 
+SPOOL OFF 
+quit;
+#################################################################################################
+1.number 类型，可以加nvl(colnum,0)
+2.
